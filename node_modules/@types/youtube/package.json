@@ -1,0 +1,39 @@
+{
+    "name": "@types/youtube",
+    "version": "0.0.47",
+    "description": "TypeScript definitions for YouTube",
+    "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/youtube",
+    "license": "MIT",
+    "contributors": [
+        {
+            "name": "Ian Obermiller",
+            "url": "http://ianobermiller.com"
+        },
+        {
+            "name": "Eliot Fallon",
+            "url": "https://github.com/eliotfallon213",
+            "githubUsername": "eliotfallon213"
+        },
+        {
+            "name": "Terry Mun",
+            "url": "https://github.com/terrymun",
+            "githubUsername": "terrymun"
+        },
+        {
+            "name": "Paul Hobbel",
+            "url": "https://github.com/paulhobbel",
+            "githubUsername": "paulhobbel"
+        }
+    ],
+    "main": "",
+    "types": "index.d.ts",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+        "directory": "types/youtube"
+    },
+    "scripts": {},
+    "dependencies": {},
+    "typesPublisherContentHash": "af9ed3561f0efaf3cfdd66c3112b2f80519df85043e528475f18eb08a75be5f8",
+    "typeScriptVersion": "4.0"
+}
