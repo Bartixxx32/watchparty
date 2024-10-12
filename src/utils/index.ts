@@ -6,7 +6,7 @@ import firebase from 'firebase/compat/app';
 import { XMLParser } from 'fast-xml-parser';
 import config from '../config';
 
-export function formatTimestamp(input: any) {
+export function formatTimestamp(input: any, wallClock?: boolean): string {
   if (
     input === null ||
     input === undefined ||
@@ -16,6 +16,12 @@ export function formatTimestamp(input: any) {
   ) {
     return '';
   }
+  if (Number(input) >= Number.MAX_SAFE_INTEGER) {
+    return 'live';
+  }
+  if (wallClock) {
+    return new Date(input * 1000).toLocaleTimeString();
+  }
   let hours = Math.floor(Number(input) / 3600);
   let minutes = (Math.floor(Number(input) / 60) % 60)
     .toString()
@@ -24,17 +30,6 @@ export function formatTimestamp(input: any) {
     .toString()
     .padStart(2, '0');
   return `${hours ? `${hours}:` : ''}${minutes}:${seconds}`;
-}
-
-export function formatUnixTime(input: string) {
-  try {
-    if (Number(input) >= Number.MAX_SAFE_INTEGER) {
-      return 'live';
-    }
-    return new Date(Number(input) * 1000).toISOString();
-  } catch {
-    return input;
-  }
 }
 
 export function formatSpeed(input: number) {
@@ -132,6 +127,10 @@ export const isMagnet = (input: string) => {
 
 export const isHls = (input: string) => {
   return input.includes('.m3u8');
+};
+
+export const isDash = (input: string) => {
+  return input.includes('.mpd');
 };
 
 export const isScreenShare = (input: string) => {
@@ -273,16 +272,16 @@ export async function getMediaPathResults(
     const response = await window.fetch(
       serverPath + '/youtubePlaylist/' + playlistID,
     );
-    const data = await response.json();
-    return data;
+    results = await response.json();
+  } else {
+    // Assume it's a text list of URLs
+    const response = await window.fetch(mediaPath);
+    const text = await response.text();
+    results = text
+      .split('\n')
+      .map((line) => ({ url: line, name: line, duration: 0, type: 'file' }));
   }
-  results = results.filter(
-    (option: SearchResult) =>
-      // Exclude subtitles
-      !option.url.endsWith('.srt') &&
-      option.name.toLowerCase().includes(query.toLowerCase()),
-  );
-  return results;
+  return results.filter((res) => res.url);
 }
 
 export async function getStreamPathResults(

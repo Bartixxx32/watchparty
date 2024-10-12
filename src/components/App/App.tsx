@@ -37,6 +37,7 @@ import {
   isScreenShare,
   isFileShare,
   isVBrowser,
+  isDash,
 } from '../../utils';
 import { generateName } from '../../utils/generateName';
 import { Chat } from '../Chat';
@@ -152,7 +153,8 @@ interface AppState {
   roomTitleColor: string | undefined;
   mediaPath: string | undefined;
   roomPlaybackRate: number;
-  isLiveHls: boolean;
+  isLiveStream: boolean;
+  liveStreamStart: number | undefined;
 }
 
 export default class App extends React.Component<AppProps, AppState> {
@@ -218,7 +220,8 @@ export default class App extends React.Component<AppProps, AppState> {
     roomTitleColor: '',
     mediaPath: undefined,
     roomPlaybackRate: 0,
-    isLiveHls: false,
+    isLiveStream: false,
+    liveStreamStart: undefined,
   };
   socket: Socket = null as any;
   mediasoupPubSocket: Socket | null = null;
@@ -435,7 +438,8 @@ export default class App extends React.Component<AppProps, AppState> {
           vBrowserResolution: '1280x720@30',
           vBrowserQuality: '1',
           controller: data.controller,
-          isLiveHls: false,
+          isLiveStream: false,
+          liveStreamStart: undefined,
         },
         async () => {
           const leftVideo = this.HTMLInterface.getVideoEl();
@@ -551,6 +555,25 @@ export default class App extends React.Component<AppProps, AppState> {
                 },
               );
             });
+          } else if (isDash(src)) {
+            const Dash = await import('dashjs');
+            const dashPlayer = Dash.MediaPlayer().create();
+            dashPlayer.initialize(leftVideo, src);
+            dashPlayer.on('streamInitialized', (_) => {
+              // for a live stream:
+              // html.currenttime is time since stream start
+              // html.duration is infinite
+              // player.duration is the seekable range
+              const now = Math.floor(Date.now() / 1000);
+              const liveStreamStart =
+                now - this.Player().getCurrentTime() - dashPlayer.duration();
+              // console.log('now', now, 'htmltime', this.Player().getCurrentTime(), 'htmlduration', this.Player().getDuration(), 'dashplayer time', dashPlayer.time(), 'durationasutc', dashPlayer.durationAsUTC(), 'dashduration', dashPlayer.duration(), 'livestreamstart', liveStreamStart);
+              this.setState({
+                isLiveStream: this.Player().getDuration() >= Infinity,
+                liveStreamStart,
+              });
+              dashPlayer.off('streamInitialized', () => {});
+            });
           } else if (isHls(src) && window.MediaSource) {
             // Prefer using hls.js if MediaSource Extensions are supported
             // otherwise fallback to native HLS support using video tag (i.e. iPhones)
@@ -560,8 +583,19 @@ export default class App extends React.Component<AppProps, AppState> {
             hls.loadSource(src);
             hls.attachMedia(leftVideo);
             hls.once(Hls.Events.LEVEL_LOADED, (_, data) => {
-              console.log('isLiveHls', data.details.live);
-              this.setState({ isLiveHls: data.details.live });
+              this.setState({ isLiveStream: data.details.live });
+            });
+            hls.once(Hls.Events.INIT_PTS_FOUND, (event, data) => {
+              const now = Math.floor(Date.now() / 1000);
+              // console.log(data.initPTS);
+              const liveStreamStart = now - this.Player().getDuration();
+              console.log(
+                'hlsplayer time',
+                this.Player().getDuration(),
+                'livestreamstart',
+                liveStreamStart,
+              );
+              this.setState({ liveStreamStart });
             });
           } else {
             await this.Player().setSrcAndTime(src, time);
@@ -575,7 +609,9 @@ export default class App extends React.Component<AppProps, AppState> {
             'canplay',
             () => {
               this.setLoadingFalse();
-              this.localSeek(this.state.isLiveHls ? data.videoTS : undefined);
+              this.localSeek(
+                this.state.isLiveStream ? data.videoTS : undefined,
+              );
               if (data.playbackRate) {
                 // Set playback rate again since it might have been lost
                 console.log('setting playback rate again', data.playbackRate);
@@ -681,7 +717,7 @@ export default class App extends React.Component<AppProps, AppState> {
         // Also not necessary for WebRTC sharing since it should be close to realtime
         if (
           !this.state.roomPaused &&
-          !this.state.isLiveHls &&
+          !this.state.isLiveStream &&
           this.hasDuration() &&
           this.state.roomPlaybackRate === 0
         ) {
@@ -1537,12 +1573,14 @@ export default class App extends React.Component<AppProps, AppState> {
     // Jump to the leader's position, or a custom one
     // for HLS the leader is the live stream position
     let target = customTime ?? this.getLeaderTime();
-    if (this.state.isLiveHls) {
-      console.log('syncing self for livehls');
+    if (this.state.isLiveStream) {
+      console.log('syncing self for livestream');
       if (customTime) {
         // Translate the time back to video time
-        // TODO Safari reports the duration as Infinity, so keep track of our duration using the max of our current timestamp
+        // NOTE: dash.js and safari HLS sets htmlmediaelement duration to infinity so compute onload and save in state
+        // If we computed use it, otherwise calculate it using duration
         const zeroTime =
+          this.state.liveStreamStart ??
           Math.floor(Date.now() / 1000) - this.HTMLInterface.getDuration();
         // Cap the time to the leadertime so we don't try to seek too close to edge
         target = Math.min(customTime - zeroTime, this.getLeaderTime());
@@ -1634,20 +1672,21 @@ export default class App extends React.Component<AppProps, AppState> {
     }
   };
 
-  roomSeek = (e: any, time: number) => {
+  roomSeek = (time: number) => {
     let target = time;
-    // Read the time from the click event if it exists
-    if (e) {
-      const rect = e.target.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const max = rect.width;
-      target = (x / max) * this.Player().getDuration();
-    }
     target = Math.max(target, 0);
     this.Player().seekVideo(target);
-    const hlsTarget =
-      Math.floor(Date.now() / 1000) - this.HTMLInterface.getDuration() + target;
-    this.socket.emit('CMD:seek', this.state.isLiveHls ? hlsTarget : target);
+    // Livestreams sync to network using timestamp since video time may be different for each viewer
+    if (this.state.isLiveStream) {
+      const now = Math.floor(Date.now() / 1000);
+      let liveStreamTarget = now - this.HTMLInterface.getDuration() + target;
+      // If livestream and seeking close to edge, set target as max
+      if (now - liveStreamTarget <= 5) {
+        liveStreamTarget = Number.MAX_SAFE_INTEGER;
+      }
+      target = liveStreamTarget;
+    }
+    this.socket.emit('CMD:seek', target);
   };
 
   onFullScreenChange = () => {
@@ -1660,9 +1699,9 @@ export default class App extends React.Component<AppProps, AppState> {
         e.preventDefault();
         this.roomTogglePlay();
       } else if (e.key === 'ArrowRight') {
-        this.roomSeek(null, this.Player().getCurrentTime() + 10);
+        this.roomSeek(this.Player().getCurrentTime() + 10);
       } else if (e.key === 'ArrowLeft') {
-        this.roomSeek(null, this.Player().getCurrentTime() - 10);
+        this.roomSeek(this.Player().getCurrentTime() - 10);
       } else if (e.key === 't') {
         this.localFullScreen(false);
       } else if (e.key === 'f') {
@@ -1787,7 +1826,7 @@ export default class App extends React.Component<AppProps, AppState> {
   };
 
   getLeaderTime = () => {
-    if (this.state.isLiveHls) {
+    if (this.state.isLiveStream) {
       // Pick a time near the end of the livestream
       return this.HTMLInterface.getDuration() - 5;
     }
@@ -1835,7 +1874,8 @@ export default class App extends React.Component<AppProps, AppState> {
         key={this.state.controlsTimestamp}
         paused={this.state.roomPaused}
         roomPlaybackRate={this.state.roomPlaybackRate}
-        isLiveHls={this.state.isLiveHls}
+        isLiveStream={this.state.isLiveStream}
+        liveStreamStart={this.state.liveStreamStart}
         muted={this.Player().isMuted()}
         volume={this.Player().getVolume()}
         subtitled={this.Player().isSubtitled()}
@@ -1960,7 +2000,7 @@ export default class App extends React.Component<AppProps, AppState> {
           isChatDisabled={this.state.isChatDisabled}
           owner={this.state.owner}
           ref={this.chatRef}
-          isLiveHls={this.state.isLiveHls}
+          isLiveStream={this.state.isLiveStream}
         />
         {this.state.state === 'connected' && (
           <VideoChat
@@ -2381,44 +2421,45 @@ export default class App extends React.Component<AppProps, AppState> {
                     <div className={styles.playerContainer}>
                       {(this.state.loading ||
                         !this.state.roomMedia ||
-                        this.state.nonPlayableMedia) && (
-                        <div
-                          id="loader"
-                          className={styles.videoContent}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          {this.state.loading && (
-                            <Dimmer active>
-                              <Loader>
-                                {this.playingVBrowser()
-                                  ? 'Launching virtual browser. This can take up to a minute.'
-                                  : ''}
-                              </Loader>
-                            </Dimmer>
-                          )}
-                          {!this.state.loading && !this.state.roomMedia && (
-                            <Message
-                              color="yellow"
-                              icon="hand point up"
-                              header="You're not watching anything!"
-                              content="Pick something to watch above."
-                            />
-                          )}
-                          {!this.state.loading &&
-                            this.state.nonPlayableMedia && (
+                        this.state.nonPlayableMedia) &&
+                        !this.state.isLiveStream && (
+                          <div
+                            id="loader"
+                            className={styles.videoContent}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            {this.state.loading && (
+                              <Dimmer active>
+                                <Loader>
+                                  {this.playingVBrowser()
+                                    ? 'Launching virtual browser. This can take up to a minute.'
+                                    : ''}
+                                </Loader>
+                              </Dimmer>
+                            )}
+                            {!this.state.loading && !this.state.roomMedia && (
                               <Message
-                                color="red"
-                                icon="frown"
-                                header="It doesn't look like this is a media file!"
-                                content="Maybe you meant to launch a VBrowser if you're trying to visit a web page?"
+                                color="yellow"
+                                icon="hand point up"
+                                header="You're not watching anything!"
+                                content="Pick something to watch above."
                               />
                             )}
-                        </div>
-                      )}
+                            {!this.state.loading &&
+                              this.state.nonPlayableMedia && (
+                                <Message
+                                  color="red"
+                                  icon="frown"
+                                  header="It doesn't look like this is a media file!"
+                                  content="Maybe you meant to launch a VBrowser if you're trying to visit a web page?"
+                                />
+                              )}
+                          </div>
+                        )}
                       <iframe
                         style={{
                           display:

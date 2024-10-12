@@ -513,8 +513,8 @@ export class Room {
       // prefer reddit m3u8 streams over the mp4 links as the m3u8 streams contain audio.
       data = reddit_m3u8 || reddit_mp4 || data;
     } else if (
-      data.startsWith('https://www.twitch.tv') ||
-      data.startsWith('https://twitch.tv')
+      data?.startsWith('https://www.twitch.tv') ||
+      data?.startsWith('https://twitch.tv')
     ) {
       try {
         // Extract m3u8 data
@@ -1135,7 +1135,9 @@ export class Room {
           [owner, this.roomId],
         )
       ).rows[0].count;
-      const limit = isSubscriber ? config.SUBSCRIBER_ROOM_LIMIT : 1;
+      const limit = isSubscriber
+        ? config.SUBSCRIBER_ROOM_LIMIT
+        : config.FREE_ROOM_LIMIT;
       if (roomCount >= limit) {
         socket.emit(
           'errorMessage',
