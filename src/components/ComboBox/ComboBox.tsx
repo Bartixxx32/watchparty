@@ -67,7 +67,7 @@ export class ComboBox extends React.Component<ComboBoxProps> {
               items = await getMediaPathResults(this.props.mediaPath, '');
             }
             if (query) {
-              let type: SearchResult['type'] = 'file';
+              let type = 'file';
               if (isYouTube(query)) {
                 type = 'youtube';
               }

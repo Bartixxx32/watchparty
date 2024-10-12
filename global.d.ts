@@ -56,7 +56,7 @@ interface SearchResult extends PlaylistVideo {
   size?: string | number;
   seeders?: string;
   magnet?: string;
-  type: 'youtube' | 'file' | 'magnet';
+  type: string;
   url: string;
   name: string;
   duration: number;
